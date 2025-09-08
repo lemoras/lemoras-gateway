@@ -305,6 +305,7 @@ func main() {
 
 	securityProxy := newReverseProxy("SECURITY_TARGET_URL")
 	systemProxy := newReverseProxy("SYSTEM_TARGET_URL")
+	serviceProxy := newReverseProxy("SERVICE_TARGET_URL")
 	fileProxy := newReverseProxy("FILE_TARGET_URL")
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +397,7 @@ func main() {
 		case strings.HasPrefix(path, "/system"):
 			systemProxy.ServeHTTP(w, r)
 		default:
-			systemProxy.ServeHTTP(w, r)
+			serviceProxy.ServeHTTP(w, r)
 		}
 	})
 

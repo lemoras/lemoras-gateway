@@ -38,9 +38,9 @@ const (
 
 var (
 	allowedOrigins = []string{
-		"https://app.example.com",
-		"https://dashboard.example.com",
-		"https://account.example.com",
+		"http://dev.local",
+		"http://account.dev.local",
+		"http://notes.dev.local",
 	}
 	trustedProxies = []string{
 		"127.0.0.1",
@@ -383,10 +383,10 @@ func main() {
 		}
 
 		// CSRF
-		if err := validateCSRF(r); err != nil {
-			http.Error(w, "CSRF validation failed: "+err.Error(), http.StatusForbidden)
-			return
-		}
+		// if err := validateCSRF(r); err != nil {
+		// 	http.Error(w, "CSRF validation failed: "+err.Error(), http.StatusForbidden)
+		// 	return
+		// }
 
 		path := r.URL.Path
 		switch {
@@ -399,6 +399,7 @@ func main() {
 		default:
 			serviceProxy.ServeHTTP(w, r)
 		}
+
 	})
 
 	port := os.Getenv("PORT")

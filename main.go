@@ -337,7 +337,7 @@ func updateAllowedOrigins() error {
 		return fmt.Errorf("failed to fetch config: %s", resp.Status)
 	}
 
-	var data struct {
+	var data []struct {
 		Domains []string `json:"domains"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
@@ -346,12 +346,14 @@ func updateAllowedOrigins() error {
 
 	newOrigins := make([]string, 0)
 	seen := make(map[string]struct{})
-	for _, o := range data.Domains {
-		o = strings.TrimSpace(o)
-		if o != "" {
-			if _, ok := seen[o]; !ok {
-				seen[o] = struct{}{}
-				newOrigins = append(newOrigins, o)
+	for _, d := range data {
+		for _, o := range d.Domains {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				if _, ok := seen[o]; !ok {
+					seen[o] = struct{}{}
+					newOrigins = append(newOrigins, "https://"+o)
+				}
 			}
 		}
 	}
@@ -381,9 +383,9 @@ func main() {
 	}
 
 	// Initialize allowedOrigins
-	// if err := updateAllowedOrigins(); err != nil {
-	// 	log.Printf("Failed to initialize allowedOrigins: %v", err)
-	// }
+	if err := updateAllowedOrigins(); err != nil {
+		log.Printf("Failed to initialize allowedOrigins: %v", err)
+	}
 
 	limiter := NewSlidingWindowLimiter()
 	limiter.Cleanup(5 * time.Minute)

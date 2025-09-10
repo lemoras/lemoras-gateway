@@ -52,9 +52,9 @@ var (
 
 // --- Token & Limiter kodları (aynı) ---
 func generateSecureToken(userID string) (string, error) {
-	secret := os.Getenv("SECRET_KEY")
+	secret := os.Getenv("TICKET_SECRET_KEY")
 	if secret == "" {
-		return "", errors.New("SECRET_KEY not set")
+		return "", errors.New("TICKET_SECRET_KEY not set")
 	}
 	randomPart := make([]byte, tokenLength)
 	if _, err := rand.Read(randomPart); err != nil {
@@ -70,9 +70,9 @@ func generateSecureToken(userID string) (string, error) {
 }
 
 func validateToken(tokenStr string) (string, error) {
-	secret := os.Getenv("SECRET_KEY")
+	secret := os.Getenv("TICKET_SECRET_KEY")
 	if secret == "" {
-		return "", errors.New("SECRET_KEY not set")
+		return "", errors.New("TICKET_SECRET_KEY not set")
 	}
 	dataBytes, err := base64.RawURLEncoding.DecodeString(tokenStr)
 	if err != nil {

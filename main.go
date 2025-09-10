@@ -25,7 +25,7 @@ import (
 const (
 	cookieSuffix        = "_token"
 	csrfCookieSuffix    = "_csrf_token"
-	userIDCookie        = "user_id"
+	accountTokenCookie  = "account_token"
 	tokenLength         = 32
 	tokenExpiry         = 20 * time.Minute
 	tokenExtendPeriod   = 15 * time.Minute
@@ -262,7 +262,31 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(parsedURL)
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		mainDomain := os.Getenv("MAIN_DOMAIN")
+		cookieName := accountTokenCookie
+		subdomain := getSubdomain("account.dev.local", mainDomain)
+		if subdomain != "" {
+			cookieName = subdomain + cookieSuffix
+		}
+		if cookie, err := req.Cookie(cookieName); err == nil {
+			token := cookie.Value
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+		}
+	}
+
 	proxy.ModifyResponse = func(resp *http.Response) error {
+
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		resp.Header.Del("Access-Control-Allow-Methods")
+
 		if strings.Contains(resp.Request.URL.Path, "/security/authenticate") {
 			bodyCopy, err := io.ReadAll(resp.Body)
 			if err != nil {
@@ -276,19 +300,22 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 				log.Printf("Error parsing authenticate response: %v", err)
 				return nil
 			}
+
 			if success, ok := parsed["success"].(bool); ok && success {
-				if userID, ok := parsed["userId"].(string); ok && userID != "" {
-					mainDomain := os.Getenv("MAIN_DOMAIN")
-					subdomain := getSubdomain(resp.Request.Host, mainDomain)
-					if subdomain != "" {
-						subToken, err := generateSecureToken(userID)
-						if err != nil {
-							log.Printf("Error generating subdomain token: %v", err)
-							return nil
+				if account, ok := parsed["account"].(map[string]interface{}); ok {
+					if token, ok := account["token"].(string); ok && token != "" {
+						mainDomain := os.Getenv("MAIN_DOMAIN")
+						subdomain := getSubdomain(resp.Request.Host, mainDomain)
+						if subdomain != "" {
+							subToken, err := generateSecureToken(token)
+							if err != nil {
+								log.Printf("Error generating subdomain token: %v", err)
+								return nil
+							}
+							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, tokenExpiry))
 						}
-						resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, tokenExpiry))
+						resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, tokenExpiry))
 					}
-					resp.Header.Add("Set-Cookie", setCookieHeader(userIDCookie, userID, "."+mainDomain, tokenExpiry))
 				}
 			}
 		}
@@ -354,9 +381,9 @@ func main() {
 	}
 
 	// Initialize allowedOrigins
-	if err := updateAllowedOrigins(); err != nil {
-		log.Printf("Failed to initialize allowedOrigins: %v", err)
-	}
+	// if err := updateAllowedOrigins(); err != nil {
+	// 	log.Printf("Failed to initialize allowedOrigins: %v", err)
+	// }
 
 	limiter := NewSlidingWindowLimiter()
 	limiter.Cleanup(5 * time.Minute)
@@ -366,8 +393,8 @@ func main() {
 	serviceProxy := newReverseProxy("SERVICE_TARGET_URL")
 	fileProxy := newReverseProxy("FILE_TARGET_URL")
 
-	apacheURL, _ := url.Parse("https://apache.otherdomain.local")
-	apacheProxy := httputil.NewSingleHostReverseProxy(apacheURL)
+	// apacheURL, _ := url.Parse("https://apache.otherdomain.local")
+	// apacheProxy := httputil.NewSingleHostReverseProxy(apacheURL)
 
 	http.HandleFunc("/refresh-origins", func(w http.ResponseWriter, r *http.Request) {
 		if err := updateAllowedOrigins(); err != nil {
@@ -386,7 +413,7 @@ func main() {
 		// --- Rate limit ---
 		ip := getIP(r)
 		key := ip
-		if cookie, err := r.Cookie(userIDCookie); err == nil {
+		if cookie, err := r.Cookie(accountTokenCookie); err == nil {
 			key = ip + "_" + cookie.Value
 		}
 
@@ -455,24 +482,24 @@ func main() {
 
 		// --- /api prefix stripping ---
 		path := r.URL.Path
-		if strings.HasPrefix(path, "/api/") {
-			path = strings.TrimPrefix(path, "/api")
-			r.URL.Path = path
+		// if strings.HasPrefix(path, "/api/") {
+		// 	path = strings.TrimPrefix(path, "/api")
+		// 	r.URL.Path = path
 
-			switch {
-			case strings.HasPrefix(path, "/security"):
-				securityProxy.ServeHTTP(w, r)
-			case strings.HasPrefix(path, "/system/file"):
-				fileProxy.ServeHTTP(w, r)
-			case strings.HasPrefix(path, "/system"):
-				systemProxy.ServeHTTP(w, r)
-			default:
-				serviceProxy.ServeHTTP(w, r)
-			}
-		} else {
-			// /api prefix yok → farklı domain'e yönlendir
-			apacheProxy.ServeHTTP(w, r)
+		switch {
+		case strings.HasPrefix(path, "/security"):
+			securityProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/system/file"):
+			fileProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/system"):
+			systemProxy.ServeHTTP(w, r)
+		default:
+			serviceProxy.ServeHTTP(w, r)
 		}
+		// } else {
+		// 	// /api prefix yok → farklı domain'e yönlendir
+		// 	apacheProxy.ServeHTTP(w, r)
+		// }
 	})
 
 	port := os.Getenv("PORT")

@@ -39,9 +39,13 @@ const (
 var (
 	allowedOrigins = []string{
 		"http://dev.local",
+		"https://dev.local",
 		"http://account.dev.local",
-		"http://notes.dev.local",
+		"https://account.dev.local",
+		"http://api.dev.local",
+		"https://api.dev.local",
 	}
+
 	trustedProxies = []string{
 		"127.0.0.1",
 		"10.0.0.0/8",

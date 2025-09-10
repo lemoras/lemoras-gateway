@@ -224,7 +224,7 @@ func getSubdomain(host, mainDomain string) string {
 }
 
 func setCookieHeader(name, value, domain string, expiry time.Duration) string {
-	return fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=Lax",
+	return fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=None",
 		name, value, domain, int(expiry.Seconds()))
 }
 
@@ -242,7 +242,7 @@ func renewAllValidSubdomainCookies(w http.ResponseWriter, r *http.Request, mainD
 				Domain:   "." + mainDomain,
 				HttpOnly: true,
 				Secure:   true,
-				SameSite: http.SameSiteLaxMode,
+				SameSite: http.SameSiteNoneMode,
 				Expires:  expires,
 				MaxAge:   int(tokenExtendPeriod.Seconds()),
 			})

@@ -45,6 +45,8 @@ var (
 		"https://account.dev.local",
 		"http://api.dev.local",
 		"https://api.dev.local",
+		"http://notes.dev.local",
+		"https://notes.dev.local",
 	}
 	trustedProxies  = []string{"127.0.0.1", "10.0.0.0/8"}
 	remoteConfigURL = "https://dev.local/system/local-config.json"

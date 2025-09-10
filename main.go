@@ -37,6 +37,7 @@ const (
 )
 
 var (
+	originsMu      sync.RWMutex
 	allowedOrigins = []string{
 		"http://dev.local",
 		"https://dev.local",
@@ -45,13 +46,11 @@ var (
 		"http://api.dev.local",
 		"https://api.dev.local",
 	}
-
-	trustedProxies = []string{
-		"127.0.0.1",
-		"10.0.0.0/8",
-	}
+	trustedProxies  = []string{"127.0.0.1", "10.0.0.0/8"}
+	remoteConfigURL = "https://dev.local/system/local-config.json"
 )
 
+// --- Token & Limiter kodları (aynı) ---
 func generateSecureToken(userID string) (string, error) {
 	secret := os.Getenv("SECRET_KEY")
 	if secret == "" {
@@ -100,7 +99,6 @@ func validateToken(tokenStr string) (string, error) {
 	if err != nil {
 		return "", errors.New("invalid timestamp")
 	}
-
 	if time.Since(time.Unix(0, ts)) > tokenExpiry {
 		return "", errors.New("token expired")
 	}
@@ -171,6 +169,7 @@ func (l *SlidingWindowLimiter) Cleanup(interval time.Duration) {
 	}()
 }
 
+// --- IP ve CSRF ---
 func isTrustedProxy(ip string) bool {
 	for _, proxy := range trustedProxies {
 		if strings.HasPrefix(ip, proxy) {
@@ -251,6 +250,7 @@ func renewAllValidSubdomainCookies(w http.ResponseWriter, r *http.Request, mainD
 	}
 }
 
+// --- Reverse Proxy ---
 func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 	targetURL := os.Getenv(targetEnv)
 	if targetURL == "" {
@@ -298,10 +298,64 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 	return proxy
 }
 
+// --- Dynamic CORS ---
+func updateAllowedOrigins() error {
+	resp, err := http.Get(remoteConfigURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch config: %s", resp.Status)
+	}
+
+	var data struct {
+		Domains []string `json:"domains"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return err
+	}
+
+	newOrigins := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, o := range data.Domains {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			if _, ok := seen[o]; !ok {
+				seen[o] = struct{}{}
+				newOrigins = append(newOrigins, o)
+			}
+		}
+	}
+
+	originsMu.Lock()
+	allowedOrigins = newOrigins
+	originsMu.Unlock()
+	return nil
+}
+
+func isOriginAllowed(origin string) bool {
+	originsMu.RLock()
+	defer originsMu.RUnlock()
+	for _, o := range allowedOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// --- Main ---
 func main() {
 	mainDomain := os.Getenv("MAIN_DOMAIN")
 	if mainDomain == "" {
 		log.Fatal("MAIN_DOMAIN environment variable is not set")
+	}
+
+	// Initialize allowedOrigins
+	if err := updateAllowedOrigins(); err != nil {
+		log.Printf("Failed to initialize allowedOrigins: %v", err)
 	}
 
 	limiter := NewSlidingWindowLimiter()
@@ -312,12 +366,24 @@ func main() {
 	serviceProxy := newReverseProxy("SERVICE_TARGET_URL")
 	fileProxy := newReverseProxy("FILE_TARGET_URL")
 
+	apacheURL, _ := url.Parse("https://apache.otherdomain.local")
+	apacheProxy := httputil.NewSingleHostReverseProxy(apacheURL)
+
+	http.HandleFunc("/refresh-origins", func(w http.ResponseWriter, r *http.Request) {
+		if err := updateAllowedOrigins(); err != nil {
+			http.Error(w, "Failed to refresh allowed origins: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("Allowed origins refreshed"))
+	})
+
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// --- Rate limit ---
 		ip := getIP(r)
 		key := ip
 		if cookie, err := r.Cookie(userIDCookie); err == nil {
@@ -334,17 +400,10 @@ func main() {
 			return
 		}
 
-		// CORS
+		// --- CORS ---
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			validOrigin := false
-			for _, o := range allowedOrigins {
-				if o == origin {
-					validOrigin = true
-					break
-				}
-			}
-			if validOrigin {
+			if isOriginAllowed(origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -356,7 +415,7 @@ func main() {
 			}
 		}
 
-		// Security headers
+		// --- Security headers ---
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
@@ -366,6 +425,7 @@ func main() {
 			return
 		}
 
+		// --- Max upload ---
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
 			contentType := r.Header.Get("Content-Type")
 			mediatype, _, err := mime.ParseMediaType(contentType)
@@ -374,6 +434,7 @@ func main() {
 			}
 		}
 
+		// --- Cookie renewal ---
 		subdomain := getSubdomain(r.Host, mainDomain)
 		cookieName := subdomain + cookieSuffix
 		if cookieName != "" {
@@ -392,18 +453,26 @@ func main() {
 		// 	return
 		// }
 
+		// --- /api prefix stripping ---
 		path := r.URL.Path
-		switch {
-		case strings.HasPrefix(path, "/security"):
-			securityProxy.ServeHTTP(w, r)
-		case strings.HasPrefix(path, "/system/file"):
-			fileProxy.ServeHTTP(w, r)
-		case strings.HasPrefix(path, "/system"):
-			systemProxy.ServeHTTP(w, r)
-		default:
-			serviceProxy.ServeHTTP(w, r)
-		}
+		if strings.HasPrefix(path, "/api/") {
+			path = strings.TrimPrefix(path, "/api")
+			r.URL.Path = path
 
+			switch {
+			case strings.HasPrefix(path, "/security"):
+				securityProxy.ServeHTTP(w, r)
+			case strings.HasPrefix(path, "/system/file"):
+				fileProxy.ServeHTTP(w, r)
+			case strings.HasPrefix(path, "/system"):
+				systemProxy.ServeHTTP(w, r)
+			default:
+				serviceProxy.ServeHTTP(w, r)
+			}
+		} else {
+			// /api prefix yok → farklı domain'e yönlendir
+			apacheProxy.ServeHTTP(w, r)
+		}
 	})
 
 	port := os.Getenv("PORT")

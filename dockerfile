@@ -1,5 +1,5 @@
 # Use official Go image as builder
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ WORKDIR /app
 RUN apk add --no-cache git ca-certificates
 
 # Copy go.mod and go.sum first for caching
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 # Copy the rest of the source code
@@ -28,8 +28,8 @@ COPY --from=builder /app/reverse-proxy .
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 
 # Set environment variables (can override with docker-compose)
-ENV PORT=8080
+ENV PORT=80
 
-EXPOSE 8080
+EXPOSE 80
 
 CMD ["./reverse-proxy"]

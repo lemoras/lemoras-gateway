@@ -327,15 +327,21 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 						mainDomain := os.Getenv("MAIN_DOMAIN")
 						hostURL := resp.Header.Get("X-Original-Host")
 						subdomain := getSubdomain(hostURL, mainDomain)
+
+						expiry := tokenExpiry
+						if subdomain == "account" {
+							expiry = 1 * time.Minute
+						}
+
 						if subdomain != "" {
 							subToken, err := generateSecureToken(token)
 							if err != nil {
 								log.Printf("Error generating subdomain token: %v", err)
 								return nil
 							}
-							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, tokenExpiry))
+							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, expiry))
 						}
-						resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, tokenExpiry))
+						resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, expiry))
 					}
 				}
 			}

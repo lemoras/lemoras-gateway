@@ -52,7 +52,7 @@ var (
 	remoteConfigURL = "https://dev.local/system/local-config.json"
 )
 
-// --- Token & Limiter kodları (aynı) ---
+// --- Token Functions ---
 func generateSecureToken(token string) (string, error) {
 	secret := os.Getenv("RATE_SECRET_KEY")
 	if secret == "" {
@@ -107,6 +107,7 @@ func validateToken(tokenStr string) (string, error) {
 	return token, nil
 }
 
+// --- Sliding Window Rate Limiter ---
 type userData struct {
 	mu         sync.Mutex
 	timestamps []time.Time
@@ -171,7 +172,7 @@ func (l *SlidingWindowLimiter) Cleanup(interval time.Duration) {
 	}()
 }
 
-// --- IP ve CSRF ---
+// --- IP & CSRF ---
 func isTrustedProxy(ip string) bool {
 	for _, proxy := range trustedProxies {
 		if strings.HasPrefix(ip, proxy) {
@@ -194,24 +195,6 @@ func getIP(r *http.Request) string {
 	return host
 }
 
-func validateCSRF(r *http.Request) error {
-	if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodDelete {
-		return nil
-	}
-	csrfCookie, err := r.Cookie(csrfCookieSuffix)
-	if err != nil {
-		return errors.New("CSRF cookie missing")
-	}
-	csrfHeader := r.Header.Get("X-CSRF-Token")
-	if csrfHeader == "" {
-		return errors.New("CSRF token header missing")
-	}
-	if csrfCookie.Value != csrfHeader {
-		return errors.New("CSRF token mismatch")
-	}
-	return nil
-}
-
 func getSubdomain(host, mainDomain string) string {
 	host = strings.ToLower(host)
 	if strings.HasSuffix(host, mainDomain) {
@@ -225,46 +208,21 @@ func getSubdomain(host, mainDomain string) string {
 	return ""
 }
 
-func setCookieHeader(name, value, domain string, expiry time.Duration) string {
-	return fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=None",
-		name, value, domain, int(expiry.Seconds()))
-}
-
-func renewAllValidSubdomainCookies(w http.ResponseWriter, r *http.Request, mainDomain string) {
-	for _, cookie := range r.Cookies() {
-		if strings.HasSuffix(cookie.Name, cookieSuffix) {
-			if _, err := validateToken(cookie.Value); err != nil {
-				continue
-			}
-			expires := time.Now().Add(tokenExtendPeriod)
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookie.Name,
-				Value:    cookie.Value,
-				Path:     "/",
-				Domain:   "." + mainDomain,
-				HttpOnly: true,
-				Secure:   true,
-				SameSite: http.SameSiteNoneMode,
-				Expires:  expires,
-				MaxAge:   int(tokenExtendPeriod.Seconds()),
-			})
-		}
+// --- Cookie Helper ---
+func setSubdomainCookieHeader(header http.Header, subdomain, token, mainDomain string) {
+	cookieName := accountTokenCookie
+	if subdomain != "" {
+		cookieName = subdomain + cookieSuffix
 	}
+	subToken, err := generateSecureToken(token)
+	if err != nil {
+		log.Printf("Error generating subdomain token: %v", err)
+		return
+	}
+	cookieStr := fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=None",
+		cookieName, subToken, "."+mainDomain, int(tokenExpiry.Seconds()))
+	header.Add("Set-Cookie", cookieStr)
 }
-
-// type loggingRoundTripper struct {
-// 	rt http.RoundTripper
-// }
-
-// func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-// 	fmt.Println(">>> Outgoing request to backend:", req.URL.String())
-// 	for name, values := range req.Header {
-// 		for _, v := range values {
-// 			fmt.Printf("Header: %s = %s\n", name, v)
-// 		}
-// 	}
-// 	return lrt.rt.RoundTrip(req)
-// }
 
 // --- Reverse Proxy ---
 func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
@@ -291,8 +249,6 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 			cookieName = subdomain + cookieSuffix
 		}
 
-		req.Header.Set("X-Original-Host", hostURL)
-
 		if cookie, err := req.Cookie(cookieName); err == nil {
 			if token, err := validateToken(cookie.Value); err == nil {
 				req.Header.Set("Authorization", "Bearer "+token)
@@ -306,10 +262,7 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 		}
 	}
 
-	// proxy.Transport = &loggingRoundTripper{rt: http.DefaultTransport}
-
 	proxy.ModifyResponse = func(resp *http.Response) error {
-
 		resp.Header.Del("Access-Control-Allow-Origin")
 		resp.Header.Del("Access-Control-Allow-Credentials")
 		resp.Header.Del("Access-Control-Allow-Headers")
@@ -334,45 +287,25 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 					if token, ok := account["token"].(string); ok && token != "" {
 						mainDomain := os.Getenv("MAIN_DOMAIN")
 						hostURL := resp.Request.Header.Get("X-Original-Host")
-
 						subdomain := getSubdomain(hostURL, mainDomain)
-
-						if subdomain != "" {
-							subToken, err := generateSecureToken(token)
-							if err != nil {
-								log.Printf("Error generating subdomain token: %v", err)
-								return nil
-							}
-							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, tokenExpiry))
-						} else {
-							subToken, err := generateSecureToken(token)
-							if err != nil {
-								log.Printf("Error generating subdomain token: %v", err)
-								return nil
-							}
-							resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, subToken, "."+mainDomain, tokenExpiry))
-						}
+						setSubdomainCookieHeader(resp.Header, subdomain, token, mainDomain)
 
 						var fakeToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJsZW1vcmFzIiwiaWF0IjoxNTg"
-						fakeToken = fakeToken + "4OTUyMjk1LCJleHAiOjE5MDQ0ODUwOTUsImF1ZCI6ImtpbWxpay5vbmxpbmUiLCJzdWIi"
-						fakeToken = fakeToken + "OiJvbnVyQHlhc2FyLmVtYWlsIiwiR2l2ZW5OYW1lIjoiT251ciIsIlN1cm5hbWUiOiJZYX"
-						fakeToken = fakeToken + "NhciIsIkVtYWlsIjoib251ckB5YXNhci5lbWFpbCIsIlJvbGUiOiJTb2x1dGlvbiBBcmNoa"
-						fakeToken = fakeToken + "XRlY3QifQ.GsruHtt1Sk1tlRJPBEmnNFuMJ_jVPr_DK84mDgyhBZ0"
-
+						fakeToken += "4OTUyMjk1LCJleHAiOjE5MDQ0ODUwOTUsImF1ZCI6ImtpbWxpay5vbmxpbmUiLCJzdWIi"
+						fakeToken += "OiJvbnVyQHlhc2FyLmVtYWlsIiwiR2l2ZW5OYW1lIjoiT251ciIsIlN1cm5hbWUiOiJZYX"
+						fakeToken += "NhciIsIkVtYWlsIjoib251ckB5YXNhci5lbWFpbCIsIlJvbGUiOiJTb2x1dGlvbiBBcmNoa"
+						fakeToken += "XRlY3QifQ.GsruHtt1Sk1tlRJPBEmnNFuMJ_jVPr_DK84mDgyhBZ0"
 						account["token"] = fakeToken
 					}
 				}
 			}
 
-			//JSON’u yeniden encode et
 			modifiedBody, err := json.Marshal(parsed)
 			if err != nil {
 				log.Printf("Error re-encoding modified response: %v", err)
-				//resp.Body = io.NopCloser(strings.NewReader(string(bodyCopy))) // geri yükle
 				return err
 			}
 
-			// Response body’yi ve Content-Length’i güncelle
 			resp.Body = io.NopCloser(strings.NewReader(string(modifiedBody)))
 			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(modifiedBody)))
 		}
@@ -382,7 +315,152 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 	return proxy
 }
 
-// --- Dynamic CORS ---
+// --- Middleware Types ---
+type Middleware func(http.Handler) http.Handler
+
+func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
+	for _, m := range middlewares {
+		h = m(h)
+	}
+	return h
+}
+
+// --- Middleware Implementations ---
+func OptionsMiddleware() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func RateLimitMiddleware(limiter *SlidingWindowLimiter) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := getIP(r)
+			key := ip
+			if cookie, err := r.Cookie(accountTokenCookie); err == nil {
+				key = ip + "_" + cookie.Value
+			}
+
+			maxReq := normalRateLimit
+			if strings.Contains(r.URL.Path, "security/validation") {
+				maxReq = validationRateLimit
+			}
+
+			if !limiter.AllowRequest(key, maxReq) {
+				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func CORSMiddleware() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				originsMu.RLock()
+				allowed := false
+				for _, o := range allowedOrigins {
+					if o == origin {
+						allowed = true
+						break
+					}
+				}
+				originsMu.RUnlock()
+				if allowed {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+					if r.Header.Get("X-Original-Host") == "" {
+						xOrgin := origin
+						xOrgin = strings.TrimPrefix(xOrgin, "http://")
+						xOrgin = strings.TrimPrefix(xOrgin, "https://")
+						r.Header.Set("X-Original-Host", xOrgin)
+					}
+				} else {
+					http.Error(w, "CORS origin not allowed", http.StatusForbidden)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func SecurityHeadersMiddleware() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("X-XSS-Protection", "1; mode=block")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func MaxUploadMiddleware() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost || r.Method == http.MethodPut {
+				contentType := r.Header.Get("Content-Type")
+				mediatype, _, err := mime.ParseMediaType(contentType)
+				if err == nil && mediatype == "multipart/form-data" {
+					r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func CookieRenewalMiddleware(mainDomain string) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			subdomain := getSubdomain(r.Header.Get("X-Original-Host"), mainDomain)
+			cookieName := subdomain + cookieSuffix
+			if cookieName != "" {
+				if cookie, err := r.Cookie(cookieName); err == nil {
+					if _, err := validateToken(cookie.Value); err == nil {
+						if time.Until(cookie.Expires) < tokenRenewThresh {
+							for _, c := range r.Cookies() {
+								if strings.HasSuffix(c.Name, cookieSuffix) {
+									if _, err := validateToken(c.Value); err == nil {
+										expires := time.Now().Add(tokenExtendPeriod)
+										http.SetCookie(w, &http.Cookie{
+											Name:     c.Name,
+											Value:    c.Value,
+											Path:     "/",
+											Domain:   "." + mainDomain,
+											HttpOnly: true,
+											Secure:   true,
+											SameSite: http.SameSiteNoneMode,
+											Expires:  expires,
+											MaxAge:   int(tokenExtendPeriod.Seconds()),
+										})
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// --- Origins Update ---
 func updateAllowedOrigins() error {
 	resp, err := http.Get(remoteConfigURL)
 	if err != nil {
@@ -421,17 +499,6 @@ func updateAllowedOrigins() error {
 	return nil
 }
 
-func isOriginAllowed(origin string) bool {
-	originsMu.RLock()
-	defer originsMu.RUnlock()
-	for _, o := range allowedOrigins {
-		if o == origin {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Main ---
 func main() {
 	mainDomain := os.Getenv("MAIN_DOMAIN")
@@ -439,7 +506,6 @@ func main() {
 		log.Fatal("MAIN_DOMAIN environment variable is not set")
 	}
 
-	// Initialize allowedOrigins
 	if err := updateAllowedOrigins(); err != nil {
 		log.Printf("Failed to initialize allowedOrigins: %v", err)
 	}
@@ -452,12 +518,12 @@ func main() {
 	serviceProxy := newReverseProxy("SERVICE_TARGET_URL")
 	fileProxy := newReverseProxy("FILE_TARGET_URL")
 
-	// apacheURL, _ := url.Parse("https://apache.otherdomain.local")
-	// apacheProxy := httputil.NewSingleHostReverseProxy(apacheURL)
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+	// Logout
+	mux.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && isOriginAllowed(origin) {
+		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
@@ -474,18 +540,9 @@ func main() {
 			return
 		}
 
-		mainDomain := os.Getenv("MAIN_DOMAIN")
-		if mainDomain == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, `{"status":false,"message":"MAIN_DOMAIN not set"}`)
-			return
-		}
-
-		// Tüm cookie’leri gez ve sil
 		for _, cookie := range r.Cookies() {
 			if strings.HasSuffix(cookie.Name, cookieSuffix) {
-				expiredCookie := &http.Cookie{
+				http.SetCookie(w, &http.Cookie{
 					Name:     cookie.Name,
 					Value:    "",
 					Path:     "/",
@@ -495,18 +552,17 @@ func main() {
 					HttpOnly: true,
 					Secure:   true,
 					SameSite: http.SameSiteNoneMode,
-				}
-				http.SetCookie(w, expiredCookie)
+				})
 			}
 		}
 
-		// Başarılı yanıt
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":true,"message":"Logout operation is successful"}`)
 	})
 
-	http.HandleFunc("/refresh-origins", func(w http.ResponseWriter, r *http.Request) {
+	// Refresh Origins
+	mux.HandleFunc("/refresh-origins", func(w http.ResponseWriter, r *http.Request) {
 		if err := updateAllowedOrigins(); err != nil {
 			http.Error(w, "Failed to refresh allowed origins: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -514,96 +570,15 @@ func main() {
 		w.Write([]byte("Allowed origins refreshed"))
 	})
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// Health
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// --- Rate limit ---
-		ip := getIP(r)
-		key := ip
-		if cookie, err := r.Cookie(accountTokenCookie); err == nil {
-			key = ip + "_" + cookie.Value
-		}
-
-		maxReq := normalRateLimit
-		if strings.Contains(r.URL.Path, "security/validation") {
-			maxReq = validationRateLimit
-		}
-
-		if !limiter.AllowRequest(key, maxReq) {
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-			return
-		}
-
-		// --- CORS ---
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			if isOriginAllowed(origin) {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
-
-				if r.Header.Get("X-Original-Host") == "" {
-					xOrgin := origin
-					xOrgin = strings.TrimPrefix(xOrgin, "http://")
-					xOrgin = strings.TrimPrefix(xOrgin, "https://")
-					r.Header.Set("X-Original-Host", xOrgin)
-				}
-
-			} else {
-				http.Error(w, "CORS origin not allowed", http.StatusForbidden)
-				return
-			}
-		}
-
-		// --- Security headers ---
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		// --- Max upload ---
-		if r.Method == http.MethodPost || r.Method == http.MethodPut {
-			contentType := r.Header.Get("Content-Type")
-			mediatype, _, err := mime.ParseMediaType(contentType)
-			if err == nil && mediatype == "multipart/form-data" {
-				r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-			}
-		}
-
-		// --- Cookie renewal ---
-		subdomain := getSubdomain(r.Header.Get("X-Original-Host"), mainDomain)
-		cookieName := subdomain + cookieSuffix
-		if cookieName != "" {
-			if cookie, err := r.Cookie(cookieName); err == nil {
-				if _, err := validateToken(cookie.Value); err == nil {
-					if time.Until(cookie.Expires) < tokenRenewThresh {
-						renewAllValidSubdomainCookies(w, r, mainDomain)
-					}
-				}
-			}
-		}
-
-		// CSRF
-		// if err := validateCSRF(r); err != nil {
-		// 	http.Error(w, "CSRF validation failed: "+err.Error(), http.StatusForbidden)
-		// 	return
-		// }
-
-		// --- /api prefix stripping ---
+	// Main catch-all handler
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		// if strings.HasPrefix(path, "/api/") {
-		// 	path = strings.TrimPrefix(path, "/api")
-		// 	r.URL.Path = path
-
 		switch {
 		case strings.HasPrefix(path, "/security"):
 			securityProxy.ServeHTTP(w, r)
@@ -614,16 +589,23 @@ func main() {
 		default:
 			serviceProxy.ServeHTTP(w, r)
 		}
-		// } else {
-		// 	// /api prefix yok → farklı domain'e yönlendir
-		// 	apacheProxy.ServeHTTP(w, r)
-		// }
 	})
+
+	handler := Chain(
+		mux,
+		OptionsMiddleware(),
+		RateLimitMiddleware(limiter),
+		CORSMiddleware(),
+		SecurityHeadersMiddleware(),
+		MaxUploadMiddleware(),
+		CookieRenewalMiddleware(mainDomain),
+		// CSRFMiddleware(), // original code had CSRF commented out. Keep it commented.
+	)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "80"
 	}
 	log.Printf("Server listening on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }

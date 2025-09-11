@@ -53,7 +53,7 @@ var (
 )
 
 // --- Token & Limiter kodları (aynı) ---
-func generateSecureToken(userID string) (string, error) {
+func generateSecureToken(token string) (string, error) {
 	secret := os.Getenv("RATE_SECRET_KEY")
 	if secret == "" {
 		return "", errors.New("RATE_SECRET_KEY not set")
@@ -63,7 +63,7 @@ func generateSecureToken(userID string) (string, error) {
 		return "", err
 	}
 	timestamp := time.Now().UnixNano()
-	data := fmt.Sprintf("%s|%x|%d", userID, randomPart, timestamp)
+	data := fmt.Sprintf("%s|%x|%d", token, randomPart, timestamp)
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write([]byte(data))
 	signature := fmt.Sprintf("%x", h.Sum(nil))
@@ -252,6 +252,20 @@ func renewAllValidSubdomainCookies(w http.ResponseWriter, r *http.Request, mainD
 	}
 }
 
+// type loggingRoundTripper struct {
+// 	rt http.RoundTripper
+// }
+
+// func (lrt *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+// 	fmt.Println(">>> Outgoing request to backend:", req.URL.String())
+// 	for name, values := range req.Header {
+// 		for _, v := range values {
+// 			fmt.Printf("Header: %s = %s\n", name, v)
+// 		}
+// 	}
+// 	return lrt.rt.RoundTrip(req)
+// }
+
 // --- Reverse Proxy ---
 func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 	targetURL := os.Getenv(targetEnv)
@@ -270,10 +284,12 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 		originalDirector(req)
 		mainDomain := os.Getenv("MAIN_DOMAIN")
 		cookieName := accountTokenCookie
-		subdomain := getSubdomain("account.dev.local", mainDomain)
+		hostURL := req.Header.Get("X-Original-Host")
+		subdomain := getSubdomain(hostURL, mainDomain)
 		if subdomain != "" {
 			cookieName = subdomain + cookieSuffix
 		}
+		fmt.Println("cookieName: " + cookieName)
 		if cookie, err := req.Cookie(cookieName); err == nil {
 			token := cookie.Value
 			if token != "" {
@@ -281,6 +297,8 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 			}
 		}
 	}
+
+	// proxy.Transport = &loggingRoundTripper{rt: http.DefaultTransport}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
 
@@ -303,11 +321,12 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 				return nil
 			}
 
-			if success, ok := parsed["success"].(bool); ok && success {
+			if success, ok := parsed["status"].(bool); ok && success {
 				if account, ok := parsed["account"].(map[string]interface{}); ok {
 					if token, ok := account["token"].(string); ok && token != "" {
 						mainDomain := os.Getenv("MAIN_DOMAIN")
-						subdomain := getSubdomain(resp.Request.Host, mainDomain)
+						hostURL := resp.Header.Get("X-Original-Host")
+						subdomain := getSubdomain(hostURL, mainDomain)
 						if subdomain != "" {
 							subToken, err := generateSecureToken(token)
 							if err != nil {
@@ -440,6 +459,14 @@ func main() {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+				if r.Header.Get("X-Original-Host") == "" {
+					xOrgin := origin
+					xOrgin = strings.TrimPrefix(xOrgin, "http://")
+					xOrgin = strings.TrimPrefix(xOrgin, "https://")
+					r.Header.Set("X-Original-Host", xOrgin)
+				}
+
 			} else {
 				http.Error(w, "CORS origin not allowed", http.StatusForbidden)
 				return
@@ -466,7 +493,7 @@ func main() {
 		}
 
 		// --- Cookie renewal ---
-		subdomain := getSubdomain(r.Host, mainDomain)
+		subdomain := getSubdomain(r.Header.Get("X-Original-Host"), mainDomain)
 		cookieName := subdomain + cookieSuffix
 		if cookieName != "" {
 			if cookie, err := r.Cookie(cookieName); err == nil {

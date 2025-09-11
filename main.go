@@ -289,6 +289,7 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 		if subdomain != "" {
 			cookieName = subdomain + cookieSuffix
 		}
+		req.Header.Set("X-Original-Host", hostURL)
 		fmt.Println("cookieName: " + cookieName)
 		if cookie, err := req.Cookie(cookieName); err == nil {
 			token := cookie.Value
@@ -339,23 +340,26 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 				if account, ok := parsed["account"].(map[string]interface{}); ok {
 					if token, ok := account["token"].(string); ok && token != "" {
 						mainDomain := os.Getenv("MAIN_DOMAIN")
-						hostURL := resp.Header.Get("X-Original-Host")
+						hostURL := resp.Request.Header.Get("X-Original-Host")
 						subdomain := getSubdomain(hostURL, mainDomain)
-
+						fmt.Println("hostURL: " + hostURL)
+						fmt.Println("subdomain: " + subdomain)
 						expiry := tokenExpiry
 						if subdomain == "account" {
 							expiry = 1 * time.Minute
 						}
 
 						if subdomain != "" {
+							fmt.Println("subdomain generateSecureToken gidi")
 							subToken, err := generateSecureToken(token)
 							if err != nil {
 								log.Printf("Error generating subdomain token: %v", err)
 								return nil
 							}
 							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, expiry))
+						} else {
+							resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, expiry))
 						}
-						resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, expiry))
 					}
 				}
 			}

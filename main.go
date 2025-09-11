@@ -84,12 +84,12 @@ func validateToken(tokenStr string) (string, error) {
 	if len(parts) != 4 {
 		return "", errors.New("invalid token format")
 	}
-	userID := parts[0]
+	token := parts[0]
 	random := parts[1]
 	timestampStr := parts[2]
 	signature := parts[3]
 
-	data := fmt.Sprintf("%s|%s|%s", userID, random, timestampStr)
+	data := fmt.Sprintf("%s|%s|%s", token, random, timestampStr)
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write([]byte(data))
 	expected := fmt.Sprintf("%x", h.Sum(nil))
@@ -104,7 +104,7 @@ func validateToken(tokenStr string) (string, error) {
 	if time.Since(time.Unix(0, ts)) > tokenExpiry {
 		return "", errors.New("token expired")
 	}
-	return userID, nil
+	return token, nil
 }
 
 type userData struct {

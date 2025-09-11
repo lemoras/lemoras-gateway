@@ -294,6 +294,20 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 			token := cookie.Value
 			if token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
+			} else {
+				if cookie3, err3 := req.Cookie(accountTokenCookie); err3 == nil {
+					token3 := cookie3.Value
+					if token3 != "" {
+						req.Header.Set("Authorization", "Bearer "+token3)
+					}
+				}
+			}
+		} else {
+			if cookie2, err2 := req.Cookie(accountTokenCookie); err2 == nil {
+				token2 := cookie2.Value
+				if token2 != "" {
+					req.Header.Set("Authorization", "Bearer "+token2)
+				}
 			}
 		}
 	}

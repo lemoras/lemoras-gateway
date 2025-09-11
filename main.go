@@ -419,6 +419,57 @@ func main() {
 	// apacheURL, _ := url.Parse("https://apache.otherdomain.local")
 	// apacheProxy := httputil.NewSingleHostReverseProxy(apacheURL)
 
+	http.HandleFunc("/api/logout", func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && isOriginAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CSRF-Token")
+			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		}
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"status":false,"message":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		mainDomain := os.Getenv("MAIN_DOMAIN")
+		if mainDomain == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `{"status":false,"message":"MAIN_DOMAIN not set"}`)
+			return
+		}
+
+		// Tüm cookie’leri gez ve sil
+		for _, cookie := range r.Cookies() {
+			if strings.HasSuffix(cookie.Name, cookieSuffix) {
+				expiredCookie := &http.Cookie{
+					Name:     cookie.Name,
+					Value:    "",
+					Path:     "/",
+					Domain:   "." + mainDomain,
+					Expires:  time.Unix(0, 0),
+					MaxAge:   -1,
+					HttpOnly: true,
+					Secure:   true,
+					SameSite: http.SameSiteNoneMode,
+				}
+				http.SetCookie(w, expiredCookie)
+			}
+		}
+
+		// Başarılı yanıt
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":true,"message":"Logout operation is successful"}`)
+	})
+
 	http.HandleFunc("/refresh-origins", func(w http.ResponseWriter, r *http.Request) {
 		if err := updateAllowedOrigins(); err != nil {
 			http.Error(w, "Failed to refresh allowed origins: "+err.Error(), http.StatusInternalServerError)

@@ -286,28 +286,21 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 		cookieName := accountTokenCookie
 		hostURL := req.Header.Get("X-Original-Host")
 		subdomain := getSubdomain(hostURL, mainDomain)
+
 		if subdomain != "" {
 			cookieName = subdomain + cookieSuffix
 		}
+
 		req.Header.Set("X-Original-Host", hostURL)
-		fmt.Println("cookieName: " + cookieName)
+
 		if cookie, err := req.Cookie(cookieName); err == nil {
-			token := cookie.Value
-			if token != "" {
+			if token, err := validateToken(cookie.Value); err == nil {
 				req.Header.Set("Authorization", "Bearer "+token)
-			} else {
-				if cookie3, err3 := req.Cookie(accountTokenCookie); err3 == nil {
-					token3 := cookie3.Value
-					if token3 != "" {
-						req.Header.Set("Authorization", "Bearer "+token3)
-					}
-				}
 			}
 		} else {
 			if cookie2, err2 := req.Cookie(accountTokenCookie); err2 == nil {
-				token2 := cookie2.Value
-				if token2 != "" {
-					req.Header.Set("Authorization", "Bearer "+token2)
+				if token, err := validateToken(cookie2.Value); err == nil {
+					req.Header.Set("Authorization", "Bearer "+token)
 				}
 			}
 		}
@@ -341,28 +334,47 @@ func newReverseProxy(targetEnv string) *httputil.ReverseProxy {
 					if token, ok := account["token"].(string); ok && token != "" {
 						mainDomain := os.Getenv("MAIN_DOMAIN")
 						hostURL := resp.Request.Header.Get("X-Original-Host")
+
 						subdomain := getSubdomain(hostURL, mainDomain)
-						fmt.Println("hostURL: " + hostURL)
-						fmt.Println("subdomain: " + subdomain)
-						expiry := tokenExpiry
-						if subdomain == "account" {
-							expiry = 1 * time.Minute
-						}
 
 						if subdomain != "" {
-							fmt.Println("subdomain generateSecureToken gidi")
 							subToken, err := generateSecureToken(token)
 							if err != nil {
 								log.Printf("Error generating subdomain token: %v", err)
 								return nil
 							}
-							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, expiry))
+							resp.Header.Add("Set-Cookie", setCookieHeader(subdomain+cookieSuffix, subToken, "."+mainDomain, tokenExpiry))
 						} else {
-							resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, token, "."+mainDomain, expiry))
+							subToken, err := generateSecureToken(token)
+							if err != nil {
+								log.Printf("Error generating subdomain token: %v", err)
+								return nil
+							}
+							resp.Header.Add("Set-Cookie", setCookieHeader(accountTokenCookie, subToken, "."+mainDomain, tokenExpiry))
 						}
+
+						var fakeToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJsZW1vcmFzIiwiaWF0IjoxNTg"
+						fakeToken = fakeToken + "4OTUyMjk1LCJleHAiOjE5MDQ0ODUwOTUsImF1ZCI6ImtpbWxpay5vbmxpbmUiLCJzdWIi"
+						fakeToken = fakeToken + "OiJvbnVyQHlhc2FyLmVtYWlsIiwiR2l2ZW5OYW1lIjoiT251ciIsIlN1cm5hbWUiOiJZYX"
+						fakeToken = fakeToken + "NhciIsIkVtYWlsIjoib251ckB5YXNhci5lbWFpbCIsIlJvbGUiOiJTb2x1dGlvbiBBcmNoa"
+						fakeToken = fakeToken + "XRlY3QifQ.GsruHtt1Sk1tlRJPBEmnNFuMJ_jVPr_DK84mDgyhBZ0"
+
+						account["token"] = fakeToken
 					}
 				}
 			}
+
+			//JSON’u yeniden encode et
+			modifiedBody, err := json.Marshal(parsed)
+			if err != nil {
+				log.Printf("Error re-encoding modified response: %v", err)
+				//resp.Body = io.NopCloser(strings.NewReader(string(bodyCopy))) // geri yükle
+				return err
+			}
+
+			// Response body’yi ve Content-Length’i güncelle
+			resp.Body = io.NopCloser(strings.NewReader(string(modifiedBody)))
+			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(modifiedBody)))
 		}
 		return nil
 	}

@@ -43,8 +43,6 @@ var (
 		"https://dev.local",
 		"http://account.dev.local",
 		"https://account.dev.local",
-		"http://api.dev.local",
-		"https://api.dev.local",
 		"http://notes.dev.local",
 		"https://notes.dev.local",
 		"https://worker.dev.local",
@@ -507,9 +505,9 @@ func main() {
 		log.Fatal("MAIN_DOMAIN environment variable is not set")
 	}
 
-	if err := updateAllowedOrigins(); err != nil {
-		log.Printf("Failed to initialize allowedOrigins: %v", err)
-	}
+	// if err := updateAllowedOrigins(); err != nil {
+	// 	log.Printf("Failed to initialize allowedOrigins: %v", err)
+	// }
 
 	limiter := NewSlidingWindowLimiter()
 	limiter.Cleanup(5 * time.Minute)

@@ -47,6 +47,7 @@ var (
 		"https://api.dev.local",
 		"http://notes.dev.local",
 		"https://notes.dev.local",
+		"https://worker.dev.local",
 	}
 	trustedProxies  = []string{"127.0.0.1", "10.0.0.0/8"}
 	remoteConfigURL = "https://dev.local/system/local-config.json"
@@ -219,7 +220,7 @@ func setSubdomainCookieHeader(header http.Header, subdomain, token, mainDomain s
 		log.Printf("Error generating subdomain token: %v", err)
 		return
 	}
-	cookieStr := fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=None",
+	cookieStr := fmt.Sprintf("%s=%s; Path=/; Domain=%s; HttpOnly; Secure; Max-Age=%d; SameSite=Lax",
 		cookieName, subToken, "."+mainDomain, int(tokenExpiry.Seconds()))
 	header.Add("Set-Cookie", cookieStr)
 }

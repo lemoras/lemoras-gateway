@@ -45,6 +45,12 @@ var (
 		"https://account.dev.local",
 		"http://notes.dev.local",
 		"https://notes.dev.local",
+		"http://drive.dev.local",
+		"https://drive.dev.local",
+		"http://passwords.dev.local",
+		"https://passwords.dev.local",
+		"http://planner.dev.local",
+		"https://planner.dev.local",
 		"https://worker.dev.local",
 	}
 	trustedProxies  = []string{"127.0.0.1", "10.0.0.0/8"}

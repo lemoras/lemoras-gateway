@@ -1,0 +1,34 @@
+Copyright (c) 2025 Onur Yasar
+
+🇹🇷 Bu proje CC BY-NC 4.0 lisansı altındadır.  
+Yazar: Onur Yasar
+E-Posta: onxorg@proton.me
+
+🇬🇧 This project is licensed under the CC BY-NC 4.0 license.  
+Author: Onur Yasar
+Email: onxorg@proton.me
+
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+
+🇹🇷 TÜRKÇE / TURKISH:
+Bu yazılım aşağıdaki lisans koşulları altında lisanslanmıştır:
+
+- Atıf (BY): Bu yazılımı kullanan herkes, orijinal yazarı [Onur Yasar] olarak belirtmek zorundadır.
+✅ - Ticari Olmayan (NC): Bu yazılım yalnızca kişisel, akademik veya ticari olmayan amaçlarla kullanılabilir.
+❌ - Ticari kullanım, satma, dağıtma veya herhangi bir ticari ürüne/hizmete dahil etme yasaktır.
+❌ - Yazılım, yazarın önceden yazılı izni olmadan değiştirilemez veya yeniden dağıtılamaz.
+
+Bu yazılım "olduğu gibi" sağlanmaktadır, hiçbir garanti verilmez.
+
+🇬🇧 ENGLISH / İNGİLİZCE:
+This software is licensed under the following terms:
+
+- Attribution (BY): Anyone using this software must credit the original author [Onur Yasar].
+✅ - NonCommercial (NC): This software may only be used for personal, academic, or other non-commercial purposes.
+❌ - Commercial use, selling, redistribution, or inclusion in any commercial product/service is strictly prohibited.
+❌ - The software may not be modified or redistributed without prior written permission from the author.
+
+This software is provided "as is", without any warranties.
+
+For the full legal text, see:
+https://creativecommons.org/licenses/by-nc/4.0/

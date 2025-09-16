@@ -25,6 +25,7 @@
 git clone https://github.com/lemoras/lemoras-gateway.git
 cd lemoras-gateway
 
+```
 
 ## 📄 Lisans / License
 
